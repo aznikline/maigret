@@ -331,6 +331,81 @@ maigret --cloudflare-bypass <username>
 
 The bypass is opt-in (`--cloudflare-bypass` or `cloudflare_bypass.enabled` in `settings.json`) and only fires for sites whose `protection` field matches. See the [feature docs](https://maigret.readthedocs.io/en/latest/features.html#cloudflare-bypass) for backend options and configuration.
 
+## Local enhanced workflow
+
+This checkout also contains an optional local OSINT enrichment pipeline. The two
+entry points intentionally have different defaults:
+
+| Command | Scope |
+| --- | --- |
+| `python -m maigret USERNAME` | Upstream-compatible defaults: top 500 sites and reports opt-in. |
+| `./maigret-search USERNAME` | Top 3000 sites, all standard reports, API verification, deep search, and entity enrichment. |
+
+`maigret-search` accepts normal Maigret options without changing their values, for
+example `./maigret-search alice --timeout 10 --site GitHub`. Its own flags are
+`--deep`, `--ai`, and `--web`. Set `MAIGRET_SKIP_FLARESOLVERR=1` when Docker-backed
+Cloudflare bypass should not be started.
+
+Local collectors share contracts from `maigret_extensions/`. Embedded reference
+repositories (`MediaCrawler`, `Spider_XHS`, and `Xiaohongshu-Shield-Algorithm`) are
+not part of the Maigret Python package or its pytest discovery boundary.
+
+### Cross-platform identity and social inference
+
+Entity enrichment writes `identity_links_<user>.json`,
+`social_inferences_<user>.json`, and `social_network_<user>.json` alongside the
+existing entity, relation, and graph outputs. The unified network directly
+dispatches GitHub, NetEase Cloud Music, Weibo, Bilibili, and authorized
+Xiaohongshu records. Every other discovered platform receives an explicit
+`unsupported`, `auth_required`, `rate_limited`, `unavailable`, or error status
+instead of being silently omitted.
+
+Identity links include evidence and a `confirmed`, `likely`, `possible`, or
+`weak` decision. Only confirmed/likely links join identity clusters. Social
+results label direct platform actions as `observed` and shared-neighborhood
+candidates as `inferred`; neither is a claim of offline friendship. The unified
+report includes directed degree, density, reciprocity, components, centrality,
+bridge/articulation nodes, deterministic communities, and combined relationship
+profiles. Metrics describe collected coverage, not a complete real-world network.
+
+Complete phone numbers are strong identity evidence (`0.95`) and are matched by
+default in process memory. Raw values are never persisted. An optional
+operator-controlled key adds a stable HMAC fingerprint to redacted output:
+
+```bash
+export MAIGRET_PHONE_HASH_KEY="$(openssl rand -hex 32)"
+./maigret-search USERNAME
+```
+
+The pipeline rejects masked numbers, never searches a platform by phone, and
+redacts raw phones from new JSON, graph, log, and console output. Existing reports
+are not migrated. Use `--no-phone-correlation` with `entity_enrich.py`, or set
+`MAIGRET_DISABLE_PHONE_CORRELATION=1` for `maigret-search`, to disable matching.
+See the [research matrix](docs/research/platform-identity-correlation.md)
+and [unified network spec](docs/plans/2026-06-20-003-feat-unified-social-network-completion-plan.md)
+for evidence weights and scope limits.
+
+### Local credentials and cookies
+
+Credentials are never written to a project file. On macOS,
+`python auto_platform.py setup PLATFORM` stores them in the login Keychain. On any
+platform they can instead be supplied through environment variables:
+
+```bash
+export MAIGRET_DIANPING_PHONE='...'
+export MAIGRET_DIANPING_PASSWORD='...'
+```
+
+Replace `DIANPING` with the uppercase platform name. Newly saved cookie JSON files
+are written atomically with owner-only (`0600`) permissions. A legacy
+`cookies/credentials.json` file is no longer read; migrate its values to Keychain or
+environment variables, then remove it manually.
+
+### Workspace verification
+
+Run `pytest` from the repository root to execute only the core `tests/` suite. The
+embedded reference repositories maintain their own dependencies and test commands.
+
 ## Contributing
 
 Add or fix new sites surgically in `data.json` (no `json.load`/`json.dump`), then run `./utils/update_site_data.py` to regenerate `sites.md` and the database metadata, and open a pull request. For more details, see the [CONTRIBUTING guide](https://github.com/soxoj/maigret/blob/main/CONTRIBUTING.md) and [development docs](https://maigret.readthedocs.io/en/latest/development.html). Release history: [CHANGELOG.md](CHANGELOG.md).

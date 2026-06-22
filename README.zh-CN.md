@@ -331,6 +331,73 @@ maigret --cloudflare-bypass <username>
 
 该功能为按需启用(命令行加 `--cloudflare-bypass`,或在 `settings.json` 中设置 `cloudflare_bypass.enabled`),并且只对 `protection` 字段匹配的站点生效。后端选项与配置详见[功能文档](https://maigret.readthedocs.io/en/latest/features.html#cloudflare-bypass)。
 
+## 本地增强工作流
+
+当前检出目录还包含一套可选的本地 OSINT 增强流水线。两个入口刻意采用不同默认值：
+
+| 命令 | 范围 |
+| --- | --- |
+| `python -m maigret USERNAME` | 与上游一致：默认前 500 个站点，报告格式按需开启。 |
+| `./maigret-search USERNAME` | 前 3000 个站点、全部标准报告、API 复核、深度搜索和实体增强。 |
+
+`maigret-search` 会原样转发标准 Maigret 参数，例如
+`./maigret-search alice --timeout 10 --site GitHub`。它自有的参数只有
+`--deep`、`--ai` 和 `--web`。不需要启动基于 Docker 的 Cloudflare 绕过时，
+设置 `MAIGRET_SKIP_FLARESOLVERR=1`。
+
+本地采集器统一使用 `maigret_extensions/` 中的数据契约。内嵌参考仓库
+`MediaCrawler`、`Spider_XHS` 和 `Xiaohongshu-Shield-Algorithm` 不属于 Maigret
+Python 包，也不会被根目录 pytest 收集。
+
+### 跨平台身份关联与社会关系推断
+
+实体增强会在原有实体、关系和图谱产物旁生成 `identity_links_<user>.json`、
+`social_inferences_<user>.json` 和 `social_network_<user>.json`。统一流水线会
+直接调度 GitHub、网易云、微博、Bilibili 和已授权的小红书账号；其他已发现平台
+也会得到明确的 `unsupported`、`auth_required`、`rate_limited`、`unavailable`
+或错误状态，不再被静默忽略。
+
+身份链接包含证据及 `confirmed`、`likely`、`possible` 或 `weak` 判定，只有
+confirmed/likely 链接会合并身份簇。社会关系结果把平台上的直接行为标为
+`observed`，把共同邻居候选标为 `inferred`；两者都不代表线下好友关系。统一报告
+还包含有向度数、密度、互惠率、连通分量、中心性、桥接/割点、确定性社区和多证据
+关系画像。指标只描述实际采集覆盖，不宣称还原完整现实社交网络。
+
+完整手机号默认作为强身份关联证据（置信度 `0.95`），仅在进程内完成规范化比对，
+原始号码不会落盘。可选配置操作者掌握的密钥，在脱敏输出中加入稳定 HMAC 指纹：
+
+```bash
+export MAIGRET_PHONE_HASH_KEY="$(openssl rand -hex 32)"
+./maigret-search USERNAME
+```
+
+流水线拒绝掩码手机号，不会按手机号反查平台，并从新生成的 JSON、图谱、日志和
+终端输出中移除原始号码；历史报告不会被自动迁移。直接调用 `entity_enrich.py`
+时可用 `--no-phone-correlation` 关闭，wrapper 可设置
+`MAIGRET_DISABLE_PHONE_CORRELATION=1`。证据权重和范围边界见
+[调研矩阵](docs/research/platform-identity-correlation.md)及
+[统一网络 spec](docs/plans/2026-06-20-003-feat-unified-social-network-completion-plan.md)。
+
+### 本地凭据与 Cookie
+
+账号凭据不再写入项目文件。在 macOS 上，运行
+`python auto_platform.py setup PLATFORM` 会把凭据保存到登录钥匙串；所有平台
+也可以改用环境变量：
+
+```bash
+export MAIGRET_DIANPING_PHONE='...'
+export MAIGRET_DIANPING_PASSWORD='...'
+```
+
+将 `DIANPING` 替换成大写平台名。新保存的 Cookie JSON 使用原子写入，权限为
+仅所有者可读写的 `0600`。旧的 `cookies/credentials.json` 已不再读取；请先把
+其中的值迁移到钥匙串或环境变量，再手动删除。
+
+### 工作区验证
+
+在仓库根目录执行 `pytest` 时只会运行核心 `tests/`。三个内嵌参考仓库分别使用
+自己的依赖和测试命令。
+
 <a id="contributing"></a>
 ## 参与贡献
 
