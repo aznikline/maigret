@@ -40,6 +40,21 @@ htmlcov/
 # Maigret files
 settings.json
 
+# Credentials / login cookies — NEVER commit. Account-equivalent secrets.
+cookies/
+cookies.txt
+credentials*.json
+
+# Scraped output and runtime artifacts (may contain PII)
+results/
+data/
+screenshots/
+
+# Vendored third-party repos — clone separately, do not commit (licensing/size)
+MediaCrawler/
+Spider_XHS/
+Xiaohongshu-Shield-Algorithm/
+
 # other
 *.egg-info
 build

@@ -609,11 +609,11 @@ class _FakeCurlSession:
 @pytest.fixture
 def fake_curl_cffi(monkeypatch):
     """Replace CurlCffiAsyncSession with a recorder. Resets capture between tests."""
-    from maigret import checking
+    from maigret import transports
     _FakeCurlSession.last_method = None
     _FakeCurlSession.last_kwargs = None
     _FakeCurlSession.last_init_kwargs = None
-    monkeypatch.setattr(checking, 'CurlCffiAsyncSession', _FakeCurlSession)
+    monkeypatch.setattr(transports, 'CurlCffiAsyncSession', _FakeCurlSession)
     return _FakeCurlSession
 
 
@@ -793,7 +793,7 @@ def _capture_tcpconnector(monkeypatch):
     appends its kwargs to the returned list. ClientSession will then receive
     a never-used dummy connector — we don't actually want to open sockets in
     tests."""
-    from maigret import checking
+    from maigret import transports
     captured = []
 
     class _DummyConnector:
@@ -808,7 +808,7 @@ def _capture_tcpconnector(monkeypatch):
         def force_close(self):
             return False
 
-    monkeypatch.setattr(checking, 'TCPConnector', _DummyConnector)
+    monkeypatch.setattr(transports, 'TCPConnector', _DummyConnector)
     return captured
 
 
