@@ -1,0 +1,224 @@
+#!/bin/bash
+# Maigret Enhanced Search Wrapper
+# Usage: ./maigret-search <username> [options]
+# Examples:
+#   ./maigret-search zstsang
+#   ./maigret-search zstsang --ai          # with AI profiling
+#   ./maigret-search zstsang --deep        # search all 3000+ sites
+#   ./maigret-search zstsang --web         # launch web UI
+#   ./maigret-search user1 user2           # multiple usernames
+
+MAIGRET_DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHON="${MAIGRET_PYTHON:-/opt/homebrew/bin/python3.11}"
+RESULTS_DIR="${MAIGRET_RESULTS_DIR:-$MAIGRET_DIR/results}"
+FLARESOLVERR_CONTAINER="flaresolverr"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Ensure results directory exists
+mkdir -p "$RESULTS_DIR"
+
+# Check Python
+if ! command -v "$PYTHON" &>/dev/null; then
+    PYTHON="python3"
+fi
+
+# Start FlareSolverr if not running
+start_flaresolverr() {
+    if [ "${MAIGRET_SKIP_FLARESOLVERR:-0}" = "1" ]; then
+        return 1
+    fi
+    if curl -s http://localhost:8191/healthz &>/dev/null; then
+        echo -e "${GREEN}[✓] FlareSolverr is running${NC}"
+        return 0
+    fi
+
+    if ! docker info &>/dev/null 2>&1; then
+        echo -e "${YELLOW}[!] Docker not running, skipping Cloudflare bypass${NC}"
+        echo -e "${YELLOW}    Start OrbStack/Docker and run: docker run -d --name flaresolverr -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest${NC}"
+        return 1
+    fi
+
+    echo -e "${CYAN}[*] Starting FlareSolverr...${NC}"
+    if docker ps -a --format '{{.Names}}' | grep -q "^${FLARESOLVERR_CONTAINER}$"; then
+        docker start "$FLARESOLVERR_CONTAINER" &>/dev/null
+    else
+        docker run -d --name "$FLARESOLVERR_CONTAINER" -p 8191:8191 -e LOG_LEVEL=info --restart unless-stopped ghcr.io/flaresolverr/flaresolverr:latest &>/dev/null
+    fi
+
+    # Wait for ready
+    for i in $(seq 1 15); do
+        if curl -s http://localhost:8191/healthz &>/dev/null; then
+            echo -e "${GREEN}[✓] FlareSolverr ready${NC}"
+            return 0
+        fi
+        sleep 1
+    done
+    echo -e "${YELLOW}[!] FlareSolverr failed to start, continuing without CF bypass${NC}"
+    return 1
+}
+
+# Parse special flags
+DEEP=false
+AI_FLAG=""
+WEB_MODE=false
+MAIGRET_ARGS=()
+USERNAMES=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --deep)   DEEP=true ;;
+        --ai)     AI_FLAG="--ai" ;;
+        --web)    WEB_MODE=true ;;
+        *)        MAIGRET_ARGS+=("$arg") ;;
+    esac
+done
+
+# Ask Maigret's authoritative parser which values are positional usernames.
+# This preserves option/value pairs such as --timeout 10 and --site GitHub.
+if ! USERNAMES_TEXT=$(cd "$MAIGRET_DIR" && "$PYTHON" -c '
+import sys
+from maigret.maigret import setup_arguments_parser
+from maigret.settings import Settings
+
+settings = Settings()
+loaded, error = settings.load()
+if not loaded:
+    raise SystemExit(error)
+args = setup_arguments_parser(settings).parse_args(sys.argv[1:])
+print("\n".join(args.username))
+' "${MAIGRET_ARGS[@]}"); then
+    echo -e "${RED}Failed to parse Maigret arguments${NC}" >&2
+    exit 2
+fi
+
+while IFS= read -r username; do
+    [ -n "$username" ] && USERNAMES+=("$username")
+done <<< "$USERNAMES_TEXT"
+
+# Web mode
+if [ "$WEB_MODE" = true ]; then
+    echo -e "${CYAN}[*] Starting Maigret Web UI on http://localhost:5000${NC}"
+    start_flaresolverr
+    cd "$MAIGRET_DIR"
+    exec "$PYTHON" -m maigret --web
+fi
+
+# Check username
+if [ ${#USERNAMES[@]} -eq 0 ]; then
+    echo -e "${RED}Usage: $0 <username> [--deep] [--ai] [--web]${NC}"
+    echo ""
+    echo "Options:"
+    echo "  --deep    Search all 3000+ sites (slower but more complete)"
+    echo "  --ai      AI-powered profile analysis (needs OpenAI API key)"
+    echo "  --web     Launch web interface"
+    echo ""
+    echo "Examples:"
+    echo "  $0 john"
+    echo "  $0 john --deep"
+    echo "  $0 john alice --ai"
+    exit 1
+fi
+
+# Try to start FlareSolverr
+CF_FLAG=""
+if start_flaresolverr; then
+    CF_FLAG="--cloudflare-bypass"
+fi
+
+# Build command
+CMD=("$PYTHON" "-m" "maigret")
+CMD+=("--folderoutput" "$RESULTS_DIR")
+CMD+=("--timeout" "30")
+CMD+=("-n" "15")
+CMD+=("--retries" "2")
+CMD+=("--top-sites" "3000")
+CMD+=("--txt" "--csv" "--html" "--pdf" "--md" "--graph")
+CMD+=("--json" "simple" "--reports-sorting" "data")
+
+if [ "$DEEP" = true ]; then
+    CMD+=("-a")
+fi
+
+if [ -n "$AI_FLAG" ]; then
+    CMD+=("$AI_FLAG")
+fi
+
+if [ -n "$CF_FLAG" ]; then
+    CMD+=("$CF_FLAG")
+fi
+
+CMD+=("${MAIGRET_ARGS[@]}")
+
+echo ""
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  Maigret Enhanced Search${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  Usernames: ${GREEN}${USERNAMES[*]}${NC}"
+echo -e "  Sites:     $([ "$DEEP" = true ] && echo "ALL (3000+)" || echo "Top 3000")"
+echo -e "  Reports:   TXT + CSV + HTML + PDF + Markdown + Graph"
+echo -e "  Output:    ${GREEN}${RESULTS_DIR}/${NC}"
+[ -n "$CF_FLAG" ] && echo -e "  CF Bypass: ${GREEN}Active${NC}"
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+cd "$MAIGRET_DIR"
+"${CMD[@]}"
+CORE_STATUS=$?
+if [ "$CORE_STATUS" -ne 0 ]; then
+    echo -e "${RED}[!] Core search failed with exit code ${CORE_STATUS}; post-processing skipped${NC}" >&2
+    exit "$CORE_STATUS"
+fi
+
+# Post-search: verify all results with platform APIs
+for u in "${USERNAMES[@]}"; do
+    JSON_REPORT="$RESULTS_DIR/report_${u}_simple.json"
+    if [ -f "$JSON_REPORT" ]; then
+        echo ""
+        echo -e "${CYAN}[*] Verifying with platform APIs...${NC}"
+        "$PYTHON" "$MAIGRET_DIR/verify_all.py" "$JSON_REPORT" "$u"
+    fi
+
+    echo ""
+    echo -e "${CYAN}[*] Running deep API search...${NC}"
+    "$PYTHON" "$MAIGRET_DIR/deep_search.py" "$u"
+
+    # Entity enrichment: harvest emails/names/phones/avatars from results,
+    # pivot through public data (Gravatar/GitHub), build an entity graph.
+    # DETECT_MUTUAL=1 enables mutual detection + 2nd-degree + cross-platform
+    # hop (Netease bindings -> Weibo -> deep fans/follows mining).
+    if [ -f "$JSON_REPORT" ]; then
+        echo ""
+        echo -e "${CYAN}[*] Enriching entities & building graph (mutual+cross-platform)...${NC}"
+        PHONE_ARGS=()
+        if [ "${MAIGRET_DISABLE_PHONE_CORRELATION:-0}" = "1" ]; then
+            PHONE_ARGS+=("--no-phone-correlation")
+        fi
+        DETECT_MUTUAL=1 MUTUAL_CHECK_MAX=50 "$PYTHON" \
+            "$MAIGRET_DIR/entity_enrich.py" \
+            --report "$JSON_REPORT" --user-name "$u" \
+            --out "$RESULTS_DIR/enrichment" "${PHONE_ARGS[@]}"
+    fi
+done
+
+# Auto-login check for closed platforms
+echo ""
+echo -e "${CYAN}[*] Checking closed platform access...${NC}"
+"$PYTHON" "$MAIGRET_DIR/auto_platform.py" status
+
+# Post-search summary
+echo ""
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYAN}  Reports generated:${NC}"
+for u in "${USERNAMES[@]}"; do
+    echo -e "  ${GREEN}${RESULTS_DIR}/${NC}"
+    ls "$RESULTS_DIR"/report_*"$u"* 2>/dev/null | while read f; do
+        echo "    $(basename "$f")"
+    done
+done
+echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
